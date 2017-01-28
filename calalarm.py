@@ -143,10 +143,13 @@ class calalarm(appapi.AppDaemon):
         if info_time>datetime.strptime(alarmtime,"%Y-%m-%dT%H:%M:%S"+self.tzoffset):
           self.log("replace alarm")
           self.cancel_timer(self.alarms[room]["handle"])
+          self.alarms[room]["handle"]=self.run_at(self.alarm_lights,datetime.strptime(alarmtime,"%Y-%m-%dT%H:%M:%S"+self.tzoffset),arg1=room)
+          self.log("Alarm updated for {} room to alarmtime={}".format(room,alarmtime))
         else:
           self.log("Duplicate alarm do nothing")
-      self.alarms[room]["handle"]=self.run_at(self.alarm_lights,datetime.strptime(alarmtime,"%Y-%m-%dT%H:%M:%S"+self.tzoffset),arg1=room)
-      self.log("new alarm added for {} room at alarmtime={}".format(room,alarmtime))
+      else:
+        self.alarms[room]["handle"]=self.run_at(self.alarm_lights,datetime.strptime(alarmtime,"%Y-%m-%dT%H:%M:%S"+self.tzoffset),arg1=room)
+        self.log("new alarm added for {} room at alarmtime={}".format(room,alarmtime))
     else:
       self.log("Alarm time {} already past".format(alarmtime))
 
