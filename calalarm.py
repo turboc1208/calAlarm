@@ -26,11 +26,15 @@ class calalarm(appapi.AppDaemon):
     #self.log("in initialize",level="INFO")
     # initialize variables
     self.alarms={}
+    filedir=self.args["configfiledir"]
+    self.client_id=self.args["client_id"]
+    self.client_secret=self.args["client_secret"]
+
 
     self.http = httplib2.Http()
-    self.client_id = "22946252841-dsmt2h71j4as4s91npps5lbg1mge74lt.apps.googleusercontent.com"
-    self.client_secret = "ONhlpv5K6tYJt1kBq0qxyagW"
-    storage = Storage('/home/hass/code/appdaemon/calalarm/credentials.dat')
+    #self.client_id = "22946252841-dsmt2h71j4as4s91npps5lbg1mge74lt.apps.googleusercontent.com"
+    #self.client_secret = "ONhlpv5K6tYJt1kBq0qxyagW"
+    storage = Storage(filedir+'/calalarm/credentials.dat')
     self.tzoffset="-06:00"
 
     self.scope = 'https://www.googleapis.com/auth/calendar'       # The scope URL for read/write access to a user's calendar data
@@ -54,7 +58,7 @@ class calalarm(appapi.AppDaemon):
     ######  Next generate this from group in HA
     self.rooms=["master","sam","charlie"]
     for room in self.rooms:
-      self.alarms[room]={"active":"","handle":""}
+      self.alarms[room]={"active":self.get_state("input_boolean."+room+"alarm"),"handle":""}
       
     ####### Build list of rooms based on calendars assigned to room groups in HA
     self.roomowners={"chip":{"room":"master","calendar":""},
@@ -81,7 +85,6 @@ class calalarm(appapi.AppDaemon):
     for room in self.rooms:
       self.schedulealarm(room)
     
-
   def authenticateCalendars(self):
     # Create a flow object. This object holds the client_id, client_secret, and
     # scope. It assists with OAuth 2.0 steps to get user authorization and
@@ -129,6 +132,12 @@ class calalarm(appapi.AppDaemon):
     #self.log("HA event {}".format(event_name),level="WARNING")
     # read calendar and update HA alarm time based on results.
     self.log("HA Restarted need to check current state")
+    for room in self.rooms:
+      #  self.alarms[room]={"active":"","handle":""}
+      if not self.alarms[room]["handle"]=="":
+        self.cancel_timer(self.alarms[room]["handle"])
+      self.alarms[room]["active"]=self.get_state("input_boolean."+room+"alarm")
+
 
     # add alarm to dictionary
   def addalarm(self,room,alarmtime):
@@ -229,13 +238,18 @@ class calalarm(appapi.AppDaemon):
   # also provide method of selecting days to run alarm possibly tied into calendar...
   def alarm_lights(self,kwargs):
     room=kwargs["arg1"]
+    self.log("active={}".format(self.alarms[room]["active"]))
     if self.alarms[room]["active"]=="on":
       self.turn_on("light.{}_light_switch".format(room))
       self.log("Lights should have been turned on light.{}_light_switch".format(room),level="INFO")
     else:
-      self.log("Lights not scheduled for today {}= {}".format(room,self.alarms[room][self.dow[todaydow]]),level="INFO")
+      self.log("Lights not scheduled for today {}= {}".format(room,self.alarms[room]),level="INFO")
+    self.alarms[room]["handle"]=""
 
   def print_calendar(self,cal):
     self.log("Printing Calendar")
     for c in cal:
       self.log("Calendar={} description={} start_time={}".format(c,cal[c]["attributes"]["description"],cal[c]["attributes"]["start_time"]))
+
+  def log(self,msg,level="INFO"):
+    super(calalarm,self).log("__function__ (__line__)" + msg,level)
