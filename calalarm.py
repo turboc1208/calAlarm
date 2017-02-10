@@ -5,6 +5,11 @@
 #
 # Jan 8, 2017 - Added Comments
 #####
+# requires tzlocal                           sudo pip3 install tzlocal
+# requires httplib2                          sudo pip3 install httplib2  (major pain in the back to get it installed right)
+# requires googleapiclient                   sudo pip3 install --upgrade google-api-python-client 
+######
+
 import appdaemon.appapi as appapi
 import inspect
 import httplib2
@@ -12,7 +17,7 @@ import sys
 from datetime import datetime
 from tzlocal import get_localzone
 
-from apiclient.discovery import build
+from googleapiclient.discovery import build
 from oauth2client import tools
 from oauth2client.file import Storage
 from oauth2client.client import AccessTokenRefreshError
@@ -147,15 +152,23 @@ class calalarm(appapi.AppDaemon):
     self.log("room= {} handle={}".format(room,self.alarms[room]["handle"]))
     if datetime.strptime(alarmtime,"%Y-%m-%dT%H:%M:%S"+self.tzoffset)>datetime.now():
       if not self.alarms[room]["handle"]=="":
-        info_time,info_interval,info_kwargs=self.info_timer(self.alarms[room]["handle"])
-        self.log("existing timer {}, interval {}, kwargs={}".format(info_time,info_interval,info_kwargs))
-        if info_time>datetime.strptime(alarmtime,"%Y-%m-%dT%H:%M:%S"+self.tzoffset):
-          self.log("replace alarm")
-          self.cancel_timer(self.alarms[room]["handle"])
-          self.alarms[room]["handle"]=self.run_at(self.alarm_lights,datetime.strptime(alarmtime,"%Y-%m-%dT%H:%M:%S"+self.tzoffset),arg1=room)
-          self.log("Alarm updated for {} room to alarmtime={}".format(room,alarmtime))
+        timer_info=self.info_timer(self.alarms[room]["handle"])
+        if not timer_info==None:
+          info_time=timer_info["info_time"]
+          info_interval=timer_info["info_interval"]
+          info_kwargs=timer_info["info_kwargs"]
+
+          self.log("existing timer {}, interval {}, kwargs={}".format(info_time,info_interval,info_kwargs))
+          if info_time>datetime.strptime(alarmtime,"%Y-%m-%dT%H:%M:%S"+self.tzoffset):
+            self.log("replace alarm")
+            self.cancel_timer(self.alarms[room]["handle"])
+            self.alarms[room]["handle"]=self.run_at(self.alarm_lights,datetime.strptime(alarmtime,"%Y-%m-%dT%H:%M:%S"+self.tzoffset),arg1=room)
+            self.log("Alarm updated for {} room to alarmtime={}".format(room,alarmtime))
+          else:
+            self.log("Duplicate alarm do nothing")
         else:
-          self.log("Duplicate alarm do nothing")
+          self.log("invalid timer, removing")
+          self.alarms[room]["handle"]=""
       else:
         self.alarms[room]["handle"]=self.run_at(self.alarm_lights,datetime.strptime(alarmtime,"%Y-%m-%dT%H:%M:%S"+self.tzoffset),arg1=room)
         self.log("new alarm added for {} room at alarmtime={}".format(room,alarmtime))
@@ -252,4 +265,18 @@ class calalarm(appapi.AppDaemon):
       self.log("Calendar={} description={} start_time={}".format(c,cal[c]["attributes"]["description"],cal[c]["attributes"]["start_time"]))
 
   def log(self,msg,level="INFO"):
-    super(calalarm,self).log("__function__ (__line__)" + msg,level)
+    obj,fname, line, func, context, index=inspect.getouterframes(inspect.currentframe())[1]
+    super(calalarm,self).log("{} - ({}) {}".format(func,str(line),msg),level)
+
+  def info_timer(self,alarmHandle):
+    rv={}
+    try:
+      info_time,info_interval,info_kwargs=super(calalarm,self).info_timer(alarmHandle)
+      rv={"info_time":info_time,"info_interval":info_interval,"info_kwargs":info_kwargs}
+      return(rv)
+    except ValueError:
+      self.log("error getting timer info on handle {}".format(alarmHandle))
+      return(None)
+    else:
+      self.log("something else went boom: {}".format(sys.exc_info()[0]))
+      raise
