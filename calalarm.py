@@ -30,6 +30,7 @@ class calalarm(appapi.AppDaemon):
     self.LOGLEVEL="DEBUG"
     #self.log("in initialize",level="INFO")
     # initialize variables
+
     self.alarms={}
     filedir=self.args["configfiledir"]
     self.client_id=self.args["client_id"]
