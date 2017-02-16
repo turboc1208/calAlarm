@@ -151,7 +151,8 @@ class calalarm(appapi.AppDaemon):
     # Dictionary should be {"room":{"active":"yes/no","handle":alarmhandle},"room2":{"active":"yes/no","handle":alarmhandle}}
     self.log("Adding alarm")
     self.log("room= {} handle={}".format(room,self.alarms[room]["handle"]))
-    if datetime.strptime(alarmtime,"%Y-%m-%dT%H:%M:%S"+self.tzoffset)>datetime.now():
+    self.log("alarmtime={}".format(alarmtime))
+    if datetime.strptime(alarmtime,self.caldateFormat(alarmtime))>datetime.now():
       if not self.alarms[room]["handle"]=="":
         timer_info=self.info_timer(self.alarms[room]["handle"])
         if not timer_info==None:
@@ -160,10 +161,10 @@ class calalarm(appapi.AppDaemon):
           info_kwargs=timer_info["info_kwargs"]
 
           self.log("existing timer {}, interval {}, kwargs={}".format(info_time,info_interval,info_kwargs))
-          if info_time>datetime.strptime(alarmtime,"%Y-%m-%dT%H:%M:%S"+self.tzoffset):
+          if info_time>datetime.strptime(alarmtime,self.caldateFormat(alarmtime)):
             self.log("replace alarm")
             self.cancel_timer(self.alarms[room]["handle"])
-            self.alarms[room]["handle"]=self.run_at(self.alarm_lights,datetime.strptime(alarmtime,"%Y-%m-%dT%H:%M:%S"+self.tzoffset),arg1=room)
+            self.alarms[room]["handle"]=self.run_at(self.alarm_lights,datetime.strptime(alarmtime,self.caldateFormat(alarmtime)),arg1=room)
             self.log("Alarm updated for {} room to alarmtime={}".format(room,alarmtime))
           else:
             self.log("Duplicate alarm do nothing")
@@ -171,7 +172,7 @@ class calalarm(appapi.AppDaemon):
           self.log("invalid timer, removing")
           self.alarms[room]["handle"]=""
       else:
-        self.alarms[room]["handle"]=self.run_at(self.alarm_lights,datetime.strptime(alarmtime,"%Y-%m-%dT%H:%M:%S"+self.tzoffset),arg1=room)
+        self.alarms[room]["handle"]=self.run_at(self.alarm_lights,datetime.strptime(alarmtime,self.caldateFormat(alarmtime)),arg1=room)
         self.log("new alarm added for {} room at alarmtime={}".format(room,alarmtime))
     else:
       self.log("Alarm time {} already past".format(alarmtime))
@@ -235,6 +236,7 @@ class calalarm(appapi.AppDaemon):
           recur_req=self.service.events().instances(calendarId=cal,timeMin=strtime,eventId=event["id"],maxResults=1)
           recur_response=recur_req.execute()
           meetjson=recur_response["items"][0]
+          self.log("recurring meetjson={} check date formats".format(meetjson))
         else:
           meetjson=event
         # meetjson now holds the next calendar event
@@ -281,3 +283,10 @@ class calalarm(appapi.AppDaemon):
     else:
       self.log("something else went boom: {}".format(sys.exc_info()[0]))
       raise
+
+  def caldateFormat(self,indate):
+    if indate.find("Z")<0:
+      dateformat="%Y-%m-%dT%H:%M:%S"+self.tzoffset
+    else:
+      dateformat="%Y-%m-%dT%H:%M:%SZ"
+    return dateformat
