@@ -151,7 +151,7 @@ class calalarm(appapi.AppDaemon):
     # Dictionary should be {"room":{"active":"yes/no","handle":alarmhandle},"room2":{"active":"yes/no","handle":alarmhandle}}
     self.log("Adding alarm")
     self.log("room= {} handle={}".format(room,self.alarms[room]["handle"]))
-    self.log("alarmtime={}".format(alarmtime))
+    #self.log("alarmtime={}".format(alarmtime))
     if datetime.strptime(alarmtime,self.caldateFormat(alarmtime))>datetime.now():
       if not self.alarms[room]["handle"]=="":
         timer_info=self.info_timer(self.alarms[room]["handle"])
@@ -180,6 +180,7 @@ class calalarm(appapi.AppDaemon):
   def checkifcalchanged(self,kwargs):
     for owner in self.roomowners:
       self.schedulealarm(self.roomowners[owner]["room"])
+    self.print_calendar()
 
   def calchanged(self,entity,attribute,old,new,kwargs):
     if not old==new:
@@ -236,7 +237,7 @@ class calalarm(appapi.AppDaemon):
           recur_req=self.service.events().instances(calendarId=cal,timeMin=strtime,eventId=event["id"],maxResults=1)
           recur_response=recur_req.execute()
           meetjson=recur_response["items"][0]
-          self.log("recurring meetjson={} check date formats".format(meetjson))
+          #self.log("recurring meetjson={} check date formats".format(meetjson))
         else:
           meetjson=event
         # meetjson now holds the next calendar event
@@ -247,6 +248,7 @@ class calalarm(appapi.AppDaemon):
       # Get the next request object by passing the previous request object to
       # the list_next method.
       request = self.service.events().list_next(request, response)
+    self.log("meetings={}".format(meetings))
     return meetings
 
   # right now, we only have one light in each room to turn on, and they are named consistently
@@ -262,10 +264,12 @@ class calalarm(appapi.AppDaemon):
       self.log("Lights not scheduled for today {}= {}".format(room,self.alarms[room]),level="INFO")
     self.alarms[room]["handle"]=""
 
-  def print_calendar(self,cal):
+  def print_calendar(self):
     self.log("Printing Calendar")
-    for c in cal:
-      self.log("Calendar={} description={} start_time={}".format(c,cal[c]["attributes"]["description"],cal[c]["attributes"]["start_time"]))
+    for room in self.alarms:
+      if not self.alarms[room]["handle"]=="":
+        ainfo=self.info_timer(self.alarms[room]["handle"])
+        self.log("{:<10}{:<10}{}".format(room,self.alarms[room]["active"],ainfo["info_time"]))
 
   def log(self,msg,level="INFO"):
     obj,fname, line, func, context, index=inspect.getouterframes(inspect.currentframe())[1]
