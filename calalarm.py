@@ -14,9 +14,11 @@ import appdaemon.appapi as appapi
 import inspect
 import httplib2
 import sys
+import json
 from datetime import datetime
 from tzlocal import get_localzone
-
+import binascii
+import os
 from googleapiclient.discovery import build
 from oauth2client import tools
 from oauth2client.file import Storage
@@ -27,28 +29,26 @@ class calalarm(appapi.AppDaemon):
   
   # Created an initialization file just to mimic AD it's called from __init__
   def initialize(self):
-    self.LOGLEVEL="DEBUG"
-    #self.log("in initialize",level="INFO")
-    # initialize variables
-
-    self.alarms={}
-    filedir=self.args["configfiledir"]
-    self.client_id=self.args["client_id"]
+    self.alarmstate={}                                                             # is the alarm active or inactive for each room
+    self.alarms={}                                                                 # holds the actual alarms
+    filedir=self.args["configfiledir"]                                             # directory for config file
+    self.client_id=self.args["client_id"]                                          # google client id and secret
     self.client_secret=self.args["client_secret"]
+    self.filename=filedir + "/" + "haalarmstate.dat"                               # config filename
 
-
-    self.http = httplib2.Http()
-    #self.client_id = "22946252841-dsmt2h71j4as4s91npps5lbg1mge74lt.apps.googleusercontent.com"
-    #self.client_secret = "ONhlpv5K6tYJt1kBq0qxyagW"
+    self.http = httplib2.Http()                                                    # setup infrastructure for talking to google.
     storage = Storage(filedir+'/calalarm/credentials.dat')
     self.tzoffset="-06:00"
 
-    self.scope = 'https://www.googleapis.com/auth/calendar'       # The scope URL for read/write access to a user's calendar data
+
+    # OAUTH Authentication (Pain in the backside)
+    self.scope = 'https://www.googleapis.com/auth/calendar'                        # The scope URL for read/write access to a user's calendar data
     # Create a flow object. This object holds the client_id, client_secret, and
     # scope. It assists with OAuth 2.0 steps to get user authorization and
     # credentials.
     self.flow = OAuth2WebServerFlow(self.client_id, self.client_secret, self.scope)
     credentials = storage.get()
+
     # need to add this so we can create new credentials if needed
     sys.argv.append("noauth_local_webserver=True")
 
@@ -62,15 +62,20 @@ class calalarm(appapi.AppDaemon):
     self.service = build('calendar', 'v3', http=self.http)
 
     ######  Next generate this from group in HA
-    self.rooms=["master","sam","charlie"]
+    self.rooms={}
+    self.rooms=eval(self.args["rooms"])
+    self.log("rooms={}".format(self.rooms))
+    #self.rooms=["master","sam","charlie"]
     for room in self.rooms:
-      self.alarms[room]={"active":self.get_state("input_boolean."+room+"alarm"),"handle":""}
-      
+      self.alarms[room]={"handle":""}
+    self.readalarmstate()
     ####### Build list of rooms based on calendars assigned to room groups in HA
-    self.roomowners={"chip":{"room":"master","calendar":""},
-                       "susan":{"room":"master","calendar":""},
-                       "sam":{"room":"sam","calendar":""},
-                       "charlie":{"room":"charlie","calendar":""}}
+    #self.roomowners={"chip":{"room":"master","calendar":""},
+    #                   "susan":{"room":"master","calendar":""},
+    #                   "sam":{"room":"sam","calendar":""},
+    #                   "charlie":{"room":"charlie","calendar":""}}
+    self.roomowners=eval(self.args["roomowners"])
+    self.log("roomowners={}".format(self.roomowners))
     entity="calendar"
     c=self.loadCalendars()
     #self.log("c={}".format(c))
@@ -80,9 +85,12 @@ class calalarm(appapi.AppDaemon):
       if c[cal] in self.roomowners:
          self.roomowners[c[cal]]["calendar"]=cal
 
-
+    self.readalarmstate()
       # setup listeners
-    teststate=self.listen_state(self.input_boolean_changed, "input_boolean")
+    boolean_list=self.buildentitylist("group.alarm_clocks")
+    self.log("boolean_list={}".format(boolean_list))
+    for switch in boolean_list:
+      teststate=self.listen_state(self.input_boolean_changed, switch)
     teststate=self.listen_event(self.restartHA,"ha_started")
     teststate=self.listen_state(self.calchanged,"calendar")
     teststate=self.run_every(self.checkifcalchanged,self.datetime(),15*60)
@@ -138,17 +146,18 @@ class calalarm(appapi.AppDaemon):
     #self.log("HA event {}".format(event_name),level="WARNING")
     # read calendar and update HA alarm time based on results.
     self.log("HA Restarted need to check current state")
+    self.readalarmstate()
     for room in self.rooms:
-      #  self.alarms[room]={"active":"","handle":""}
       if not self.alarms[room]["handle"]=="":
         self.cancel_timer(self.alarms[room]["handle"])
-      self.alarms[room]["active"]=self.get_state("input_boolean."+room+"alarm")
+      ############## Change this to set HA state based on data read from file
+      self.set_state("input_boolean."+room+"alarm",state=self.alarmstate[room]["active"])
 
 
     # add alarm to dictionary
   def addalarm(self,room,alarmtime):
     # schedule the alarm and add handle to the dictionary so it can be cancled if needed
-    # Dictionary should be {"room":{"active":"yes/no","handle":alarmhandle},"room2":{"active":"yes/no","handle":alarmhandle}}
+    # Dictionary should be {"room":{"handle":alarmhandle},"room2":{"handle":alarmhandle}}
     self.log("Adding alarm")
     self.log("room= {} handle={}".format(room,self.alarms[room]["handle"]))
     #self.log("alarmtime={}".format(alarmtime))
@@ -195,15 +204,51 @@ class calalarm(appapi.AppDaemon):
     room=entity[entity.find(".")+1:entity.find("alarm")]
     if new=="on":
       if room in self.rooms:
-        self.alarms[room]["active"]=new
+        if not room in self.alarmstate:
+          self.alarmstate[room]={}
+        self.alarmstate[room]["active"]=new
         self.log("room {} active set to {}".format(room,new))
         self.schedulealarm(room)
     else:
       if room in self.rooms:
-        self.alarms[room]["active"]=new                    # alarm has been deactivated
+        if not room in self.alarmstate:
+          self.alarmstate[room]={}
+        self.alarmstate[room]["active"]=new                    # alarm has been deactivated
         if not self.alarms[room]["handle"]=="":            #cleanup any current alarms
           self.cancel_timer(self.alarms[room]["handle"])
           self.alarms[room]["handle"]=""
+    self.savealarmstate()
+
+  def readalarmstate(self):
+    if os.path.exists(self.filename):
+      fin=open(self.filename,"rt")
+      self.alarmstate=json.load(fin)
+      fin.close()
+    else:
+      self.alarmstate={}
+      for room in self.rooms:
+        self.alarmstate[room]={}
+        self.alarmstate[room]["active"]=self.get_state("input_boolean."+room+"alarm")
+      self.savealarmstate()
+
+  def savealarmstate(self):
+    fout=open(self.filename,"wt")
+    json.dump(self.alarmstate,fout)
+    fout.close()
+    self.setfilemode(self.filename,"rw-rw-rw-")
+
+  def setfilemode(self,infile,mode):
+    if len(mode)<9:
+      self.log("mode must bein the format of 'rwxrwxrwx'")
+    else:
+      result=0
+      for val in mode: 
+        if val in ("r","w","x"):
+          result=(result << 1) | 1
+        else:
+          result=result << 1
+      self.log("Setting file to mode {} binary {}".format(mode,bin(result)))
+      os.chmod(infile,result)
 
   def getRoomOwner(self,room):
     ownerlist=[]
@@ -269,7 +314,7 @@ class calalarm(appapi.AppDaemon):
     for room in self.alarms:
       if not self.alarms[room]["handle"]=="":
         ainfo=self.info_timer(self.alarms[room]["handle"])
-        self.log("{:<10}{:<10}{}".format(room,self.alarms[room]["active"],ainfo["info_time"]))
+        self.log("{:<10}{:<10}{}".format(room,self.alarmstate[room]["active"],ainfo["info_time"]))
 
   def log(self,msg,level="INFO"):
     obj,fname, line, func, context, index=inspect.getouterframes(inspect.currentframe())[1]
@@ -294,3 +339,14 @@ class calalarm(appapi.AppDaemon):
     else:
       dateformat="%Y-%m-%dT%H:%M:%SZ"
     return dateformat
+
+  def buildentitylist(self,ingroup):
+    self.log("ingroup={}".format(ingroup))
+    retlist=[]
+    devtyp, devname = self.split_entity(ingroup)
+    if devtyp=="group":
+      for entity in self.get_state(ingroup,attribute="all")["attributes"]["entity_id"]:
+        retlist.append(self.buildentitylist(entity))
+    else:
+      retlist=ingroup
+    return retlist
