@@ -87,7 +87,9 @@ class calalarm(appapi.AppDaemon):
 
     self.readalarmstate()
       # setup listeners
-    boolean_list=self.build_entity_list("group.alarm_clocks",['input_boolean'])
+    statusgroup=self.args["alarmgroup"]
+    self.log("alarm status group is {}".format(statusgroup))
+    boolean_list=self.build_entity_list(statusgroup,['input_boolean'])
     self.log("boolean_list={}".format(boolean_list))
     for switch in boolean_list:
       teststate=self.listen_state(self.input_boolean_changed, switch)
@@ -158,8 +160,8 @@ class calalarm(appapi.AppDaemon):
   def addalarm(self,room,alarmtime):
     # schedule the alarm and add handle to the dictionary so it can be cancled if needed
     # Dictionary should be {"room":{"handle":alarmhandle},"room2":{"handle":alarmhandle}}
-    self.log("Adding alarm")
-    self.log("room= {} handle={}".format(room,self.alarms[room]["handle"]))
+    #self.log("Adding alarm")
+    #self.log("room= {} handle={}".format(room,self.alarms[room]["handle"]))
     #self.log("alarmtime={}".format(alarmtime))
     if datetime.strptime(alarmtime,self.caldateFormat(alarmtime))>datetime.now():
       if not self.alarms[room]["handle"]=="":
@@ -173,6 +175,7 @@ class calalarm(appapi.AppDaemon):
           if info_time>datetime.strptime(alarmtime,self.caldateFormat(alarmtime)):
             self.log("replace alarm")
             self.cancel_timer(self.alarms[room]["handle"])
+            self.log("setting alarm for {} in roomt {}".format(datetime.strptime(alarmtime,self.caldateFormat(alarmtime)),room))
             self.alarms[room]["handle"]=self.run_at(self.alarm_lights,datetime.strptime(alarmtime,self.caldateFormat(alarmtime)),arg1=room)
             self.log("Alarm updated for {} room to alarmtime={}".format(room,alarmtime))
           else:
@@ -280,7 +283,12 @@ class calalarm(appapi.AppDaemon):
       for event in response.get('items', []):
         if "recurrence" in event:
           recur_req=self.service.events().instances(calendarId=cal,timeMin=strtime,eventId=event["id"],maxResults=1)
-          recur_response=recur_req.execute()
+          try:
+            recur_response=recur_req.execute()
+          except SSLError:
+            self.log("SSLError need to retry this")
+            return None
+            break
           meetjson=recur_response["items"][0]
           #self.log("recurring meetjson={} check date formats".format(meetjson))
         else:
@@ -293,7 +301,7 @@ class calalarm(appapi.AppDaemon):
       # Get the next request object by passing the previous request object to
       # the list_next method.
       request = self.service.events().list_next(request, response)
-    self.log("meetings={}".format(meetings))
+    #self.log("meetings={}".format(meetings))
     return meetings
 
   # right now, we only have one light in each room to turn on, and they are named consistently
@@ -301,8 +309,8 @@ class calalarm(appapi.AppDaemon):
   # also provide method of selecting days to run alarm possibly tied into calendar...
   def alarm_lights(self,kwargs):
     room=kwargs["arg1"]
-    self.log("active={}".format(self.alarms[room]["active"]))
-    if self.alarms[room]["active"]=="on":
+    self.log("active={}".format(self.alarmstate[room]["active"]))
+    if self.alarmstate[room]["active"]=="on":
       self.turn_on("light.{}_light_switch".format(room))
       self.log("Lights should have been turned on light.{}_light_switch".format(room),level="INFO")
     else:
@@ -314,7 +322,7 @@ class calalarm(appapi.AppDaemon):
     for room in self.alarms:
       if not self.alarms[room]["handle"]==None:
         ainfo=self.info_timer(self.alarms[room]["handle"])
-        self.log("room={},alarmstate active?={}, handle {}".format(room, self.alarmstate[room]["active"],ainfo))
+        #self.log("room={},alarmstate active?={}, handle {}".format(room, self.alarmstate[room]["active"],ainfo))
         self.log("{:<10}{:<10}{}".format(room,self.alarmstate[room]["active"],ainfo["info_time"]))
 
   def log(self,msg,level="INFO"):
