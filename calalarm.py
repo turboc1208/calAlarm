@@ -10,7 +10,7 @@
 # requires googleapiclient                   sudo pip3 install --upgrade google-api-python-client 
 ######
 
-import appdaemon.appapi as appapi
+import my_appapi as appapi
 import inspect
 import httplib2
 import sys
@@ -25,7 +25,7 @@ from oauth2client.file import Storage
 from oauth2client.client import AccessTokenRefreshError
 from oauth2client.client import OAuth2WebServerFlow
          
-class calalarm(appapi.AppDaemon):
+class calalarm(appapi.my_appapi):
   
   # Created an initialization file just to mimic AD it's called from __init__
   def initialize(self):
@@ -325,9 +325,9 @@ class calalarm(appapi.AppDaemon):
         #self.log("room={},alarmstate active?={}, handle {}".format(room, self.alarmstate[room]["active"],ainfo))
         self.log("{:<10}{:<10}{}".format(room,self.alarmstate[room]["active"],ainfo["info_time"]))
 
-  def log(self,msg,level="INFO"):
-    obj,fname, line, func, context, index=inspect.getouterframes(inspect.currentframe())[1]
-    super(calalarm,self).log("{} - ({}) {}".format(func,str(line),msg),level)
+#  def log(self,msg,level="INFO"):
+#    obj,fname, line, func, context, index=inspect.getouterframes(inspect.currentframe())[1]
+#    super(calalarm,self).log("{} - ({}) {}".format(func,str(line),msg),level)
 
   def info_timer(self,alarmHandle):
     rv={}
@@ -361,37 +361,37 @@ class calalarm(appapi.AppDaemon):
   #
   # returns a python list containing all the entities found that match the device types in inlist.
   ######################
-  def build_entity_list(self,ingroup,inlist=['all']):
-    retlist=[]
-    types=[]
-    typelist=[]
-
-    # validate values passed in
-    if not self.entity_exists(ingroup):
-      self.log("entity {} does not exist in home assistant".format(ingroup))
-      return None
-    if isinstance(inlist,list):
-      typelist=inlist
-    else:
-      self.log("inlist must be a list ['light','switch','media_player'] for example")
-      return None
-
-    # determine what types of HA entities to return
-    if "all" in typelist:
-      types=["all"]
-    else:
-      types= types + typelist
-      types.append("group")            # include group so that it doesn't ignore child groups
-
-    # check the device type to see if it is something we care about
-    devtyp, devname = self.split_entity(ingroup)
-    if (devtyp in types) or ("all" in types):                # do we have a valid HA entity type
-      if devtyp=="group":                                    # entity is a group so iterate through it recursing back into this function.
-        for entity in self.get_state(ingroup,attribute="all")["attributes"]["entity_id"]:
-          newitem=self.build_entity_list(entity,typelist)    # recurse through each member of the child group we are in.
-          if not newitem==None:                              # None means there was a problem with the value passed in, so don't include it in our output list
-            retlist.extend(newitem)                          # all is good so concatenate our lists together
-      else:
-        retlist.append(ingroup)                                      # actual entity so return it as part of a list so it can be concatenated
-    return retlist
+  #def build_entity_list(self,ingroup,inlist=['all']):
+  #  retlist=[]
+  #  types=[]
+  #  typelist=[]
+#
+#    # validate values passed in
+#    if not self.entity_exists(ingroup):
+#      self.log("entity {} does not exist in home assistant".format(ingroup))
+#      return None
+#    if isinstance(inlist,list):
+#      typelist=inlist
+#    else:
+#      self.log("inlist must be a list ['light','switch','media_player'] for example")
+#      return None
+#
+#    # determine what types of HA entities to return
+#    if "all" in typelist:
+#      types=["all"]
+#    else:
+#      types= types + typelist
+#      types.append("group")            # include group so that it doesn't ignore child groups
+#
+#    # check the device type to see if it is something we care about
+#    devtyp, devname = self.split_entity(ingroup)
+#    if (devtyp in types) or ("all" in types):                # do we have a valid HA entity type
+#      if devtyp=="group":                                    # entity is a group so iterate through it recursing back into this function.
+#        for entity in self.get_state(ingroup,attribute="all")["attributes"]["entity_id"]:
+#          newitem=self.build_entity_list(entity,typelist)    # recurse through each member of the child group we are in.
+#          if not newitem==None:                              # None means there was a problem with the value passed in, so don't include it in our output list
+#            retlist.extend(newitem)                          # all is good so concatenate our lists together
+#      else:
+#        retlist.append(ingroup)                                      # actual entity so return it as part of a list so it can be concatenated
+#    return retlist
 
