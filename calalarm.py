@@ -16,7 +16,10 @@ import httplib2
 import sys
 import json
 from datetime import datetime
+from datetime import timedelta
+import time
 from tzlocal import get_localzone
+import re
 import binascii
 import os
 from googleapiclient.discovery import build
@@ -24,11 +27,17 @@ from oauth2client import tools
 from oauth2client.file import Storage
 from oauth2client.client import AccessTokenRefreshError
 from oauth2client.client import OAuth2WebServerFlow
+import ssl
          
 class calalarm(appapi.my_appapi):
   
   # Created an initialization file just to mimic AD it's called from __init__
   def initialize(self):
+
+    # need to move this into appdaemon.cfg file
+    self.tzoffset="-06:00"
+
+
     self.alarmstate={}                                                             # is the alarm active or inactive for each room
     self.alarms={}                                                                 # holds the actual alarms
     filedir=self.args["configfiledir"]                                             # directory for config file
@@ -38,7 +47,6 @@ class calalarm(appapi.my_appapi):
 
     self.http = httplib2.Http()                                                    # setup infrastructure for talking to google.
     storage = Storage(filedir+'/calalarm/credentials.dat')
-    self.tzoffset="-06:00"
 
 
     # OAUTH Authentication (Pain in the backside)
@@ -65,15 +73,10 @@ class calalarm(appapi.my_appapi):
     self.rooms={}
     self.rooms=eval(self.args["rooms"])
     self.log("rooms={}".format(self.rooms))
-    #self.rooms=["master","sam","charlie"]
+
     for room in self.rooms:
       self.alarms[room]={"handle":""}
     self.readalarmstate()
-    ####### Build list of rooms based on calendars assigned to room groups in HA
-    #self.roomowners={"chip":{"room":"master","calendar":""},
-    #                   "susan":{"room":"master","calendar":""},
-    #                   "sam":{"room":"sam","calendar":""},
-    #                   "charlie":{"room":"charlie","calendar":""}}
     self.roomowners=eval(self.args["roomowners"])
     self.log("roomowners={}".format(self.roomowners))
     entity="calendar"
@@ -100,7 +103,7 @@ class calalarm(appapi.my_appapi):
       # setup initial values in HA based on saved alarm settings
     for room in self.rooms:
       self.schedulealarm(room)
-    
+
   def authenticateCalendars(self):
     # Create a flow object. This object holds the client_id, client_secret, and
     # scope. It assists with OAuth 2.0 steps to get user authorization and
@@ -162,8 +165,9 @@ class calalarm(appapi.my_appapi):
     # Dictionary should be {"room":{"handle":alarmhandle},"room2":{"handle":alarmhandle}}
     #self.log("Adding alarm")
     #self.log("room= {} handle={}".format(room,self.alarms[room]["handle"]))
-    #self.log("alarmtime={}".format(alarmtime))
-    if datetime.strptime(alarmtime,self.caldateFormat(alarmtime))>datetime.now():
+    #self.log("alarmtime={}, {} {}, {}, {}, {}, {}".format(alarmtime,self.convert_local(alarmtime),get_localzone(),time.daylight,int(time.timezone/-3600),int(time.altzone/-3600),self.local_tz_offset()))
+    #if datetime.strptime(alarmtime,self.caldateFormat(alarmtime))>datetime.now():
+    if self.convert_local(alarmtime)>datetime.now():
       if not self.alarms[room]["handle"]=="":
         timer_info=self.info_timer(self.alarms[room]["handle"])
         if not timer_info==None:
@@ -172,11 +176,11 @@ class calalarm(appapi.my_appapi):
           info_kwargs=timer_info["info_kwargs"]
 
           self.log("existing timer {}, interval {}, kwargs={}".format(info_time,info_interval,info_kwargs))
-          if info_time>datetime.strptime(alarmtime,self.caldateFormat(alarmtime)):
+          if info_time>self.convert_local(alarmtime):
             self.log("replace alarm")
             self.cancel_timer(self.alarms[room]["handle"])
-            self.log("setting alarm for {} in roomt {}".format(datetime.strptime(alarmtime,self.caldateFormat(alarmtime)),room))
-            self.alarms[room]["handle"]=self.run_at(self.alarm_lights,datetime.strptime(alarmtime,self.caldateFormat(alarmtime)),arg1=room)
+            self.log("setting alarm for {} in room {}".format(self.convert_local(alarmtime),room))
+            self.alarms[room]["handle"]=self.run_at(self.alarm_lights,self.convert_local(alarmtime),arg1=room)
             self.log("Alarm updated for {} room to alarmtime={}".format(room,alarmtime))
           else:
             self.log("Duplicate alarm do nothing")
@@ -184,7 +188,7 @@ class calalarm(appapi.my_appapi):
           self.log("invalid timer, removing")
           self.alarms[room]["handle"]=""
       else:
-        self.alarms[room]["handle"]=self.run_at(self.alarm_lights,datetime.strptime(alarmtime,self.caldateFormat(alarmtime)),arg1=room)
+        self.alarms[room]["handle"]=self.run_at(self.alarm_lights,self.convert_local(alarmtime),arg1=room)
         self.log("new alarm added for {} room at alarmtime={}".format(room,alarmtime))
     else:
       self.log("Alarm time {} already past".format(alarmtime))
@@ -264,9 +268,10 @@ class calalarm(appapi.my_appapi):
     owner=self.getRoomOwner(room)
     for o in owner:
       meeting=self.getMeetings(self.roomowners[o]["calendar"])
-      for m in meeting:
-        if meeting[m].upper()=="WAKEUP":
-          self.addalarm(room,m)
+      if not meeting==None:
+        for m in meeting:
+          if meeting[m].upper()=="WAKEUP":
+            self.addalarm(room,m)
     
   def getMeetings(self,cal):    # pass in Calendar (not users name)
     now = datetime.now()
@@ -277,7 +282,16 @@ class calalarm(appapi.my_appapi):
     # Loop until all pages have been processed.
     while request != None:
       # Get the next page.
-      response = request.execute()
+      try:
+        response = request.execute()
+      except ssl.SSLError:
+        self.log("we got that SSLError again lets see if we keep going")
+        continue
+      except http.client.IncompleteRead:
+        self.log("http client incomplete read")
+        continue
+      except:
+        raise
       # Accessing the response like a dict object with an 'items' key
       # returns a list of item objects (events).
       for event in response.get('items', []):
@@ -285,8 +299,8 @@ class calalarm(appapi.my_appapi):
           recur_req=self.service.events().instances(calendarId=cal,timeMin=strtime,eventId=event["id"],maxResults=1)
           try:
             recur_response=recur_req.execute()
-          except SSLError:
-            self.log("SSLError need to retry this")
+          except :
+            self.log("SSLError {} need to retry this".format(sys.exc_info()[0]))
             return None
             break
           meetjson=recur_response["items"][0]
@@ -319,11 +333,21 @@ class calalarm(appapi.my_appapi):
 
   def print_calendar(self):
     self.log("Printing Calendar")
-    for room in self.alarms:
-      if not self.alarms[room]["handle"]==None:
-        ainfo=self.info_timer(self.alarms[room]["handle"])
-        #self.log("room={},alarmstate active?={}, handle {}".format(room, self.alarmstate[room]["active"],ainfo))
-        self.log("{:<10}{:<10}{}".format(room,self.alarmstate[room]["active"],ainfo["info_time"]))
+    try:
+      for room in self.alarms:
+        if not self.alarms[room]["handle"]==None:
+          try:
+            ainfo=self.info_timer(self.alarms[room]["handle"])
+          except TypeError:
+            continue
+          except:
+            raise
+          #self.log("room={},alarmstate active?={}, handle {}".format(room, self.alarmstate[room]["active"],ainfo))
+          self.log("{:<10}{:<10}{}".format(room,self.alarmstate[room]["active"],ainfo["info_time"]))
+    except TypeError:
+      self.log("self.alarms={}".format(self.alarms))
+    except:
+      raise
 
 #  def log(self,msg,level="INFO"):
 #    obj,fname, line, func, context, index=inspect.getouterframes(inspect.currentframe())[1]
@@ -349,49 +373,11 @@ class calalarm(appapi.my_appapi):
       dateformat="%Y-%m-%dT%H:%M:%SZ"
     return dateformat
 
-  ######################
-  #
-  # build_entity_list (self, ingroup, inlist - optional: defaults to all entity types))
-  #
-  # build a list of all of the entities in a group or nested hierarchy of groups
-  #
-  # ingroup = Starting group to cascade through
-  # inlist = a list of the entity types the list may contain.  Use this if you only want a list of lights and switches for example.
-  #            this would then exclude any input_booleans, input_sliders, media_players, sensors, etc. - defaults to all entity types.
-  #
-  # returns a python list containing all the entities found that match the device types in inlist.
-  ######################
-  #def build_entity_list(self,ingroup,inlist=['all']):
-  #  retlist=[]
-  #  types=[]
-  #  typelist=[]
-#
-#    # validate values passed in
-#    if not self.entity_exists(ingroup):
-#      self.log("entity {} does not exist in home assistant".format(ingroup))
-#      return None
-#    if isinstance(inlist,list):
-#      typelist=inlist
-#    else:
-#      self.log("inlist must be a list ['light','switch','media_player'] for example")
-#      return None
-#
-#    # determine what types of HA entities to return
-#    if "all" in typelist:
-#      types=["all"]
-#    else:
-#      types= types + typelist
-#      types.append("group")            # include group so that it doesn't ignore child groups
-#
-#    # check the device type to see if it is something we care about
-#    devtyp, devname = self.split_entity(ingroup)
-#    if (devtyp in types) or ("all" in types):                # do we have a valid HA entity type
-#      if devtyp=="group":                                    # entity is a group so iterate through it recursing back into this function.
-#        for entity in self.get_state(ingroup,attribute="all")["attributes"]["entity_id"]:
-#          newitem=self.build_entity_list(entity,typelist)    # recurse through each member of the child group we are in.
-#          if not newitem==None:                              # None means there was a problem with the value passed in, so don't include it in our output list
-#            retlist.extend(newitem)                          # all is good so concatenate our lists together
-#      else:
-#        retlist.append(ingroup)                                      # actual entity so return it as part of a list so it can be concatenated
-#    return retlist
+  def local_tz_offset(self):
+    return(int(time.altzone/-3600) if time.daylight else int(time.timezone/-3600))
+
+  def convert_local(self, local):
+    return datetime(
+        *map(int, re.split('[^\d]', local)[:-1])
+    )
 
